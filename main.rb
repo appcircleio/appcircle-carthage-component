@@ -26,8 +26,9 @@ if !is_carthage_available
 end
 
 Dir.chdir(cartfile_dir_path) do
-    command = "carthage"
+    command = "carthage "
     command += ENV["AC_CARTHAGE_COMMAND"] || "bootstrap"
+    command += " "
     command += ENV["AC_CARTHAGE_FLAGS"] || ""
     runCommand(command)
 end
