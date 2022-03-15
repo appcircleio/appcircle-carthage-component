@@ -3,7 +3,7 @@ require 'pathname'
 
 cartfile_path = ENV["AC_CARTFILE_PATH"] || "./"
 repository_path = ENV["AC_REPOSITORY_DIR"]
-is_carthage_available = File.exist?("usr/local/bin/carthage")
+is_carthage_available = File.exist?("/usr/local/bin/carthage")
 
 cartfile_dir_path = repository_path ? (Pathname.new repository_path).join(File.dirname(cartfile_path)) : File.dirname(cartfile_path)
 carthage_cartfile_path = File.join(cartfile_dir_path,"Cartfile")
