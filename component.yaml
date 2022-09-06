@@ -21,6 +21,7 @@ inputs:
   description: Specifies carthage command to run.
   helpText:
 - key: "AC_CARTHAGE_FLAGS"
+  defaultValue: "--platform iOS --use-xcframeworks"
   isRequired: false
   title: Additional Carthage Flags
   description: "Specifies carthage flags to add. For example: --platform iOS --use-xcframeworks"
