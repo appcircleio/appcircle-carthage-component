@@ -1,6 +1,8 @@
 require 'open3'
 require 'pathname'
 
+if __FILE__ == $PROGRAM_NAME
+
 cartfile_path = ENV["AC_CARTFILE_PATH"] || "./"
 repository_path = ENV["AC_REPOSITORY_DIR"]
 is_carthage_available = File.exist?("/usr/local/bin/carthage")
@@ -14,12 +16,16 @@ unless File.exist?(carthage_cartfile_path)
     exit 0
 end
 
+end # if __FILE__ == $PROGRAM_NAME
+
 def runCommand(command)
     puts "@@[command] #{command}"
     unless system(command)
       exit $?.exitstatus
     end
 end
+
+if __FILE__ == $PROGRAM_NAME
 
 if !is_carthage_available
     runCommand("brew install carthage")
@@ -34,3 +40,5 @@ Dir.chdir(cartfile_dir_path) do
 end
 
 exit 0
+
+end # if __FILE__ == $PROGRAM_NAME
