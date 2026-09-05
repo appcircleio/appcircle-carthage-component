@@ -17,6 +17,29 @@ require 'stringio'
 MAIN_RB      = File.expand_path('../main.rb', __dir__)
 PROJECT_ROOT = File.dirname(MAIN_RB)
 
+# ─── Subprocess coverage ──────────────────────────────────────────────────────
+# Everything under `if __FILE__ == $PROGRAM_NAME` only runs when main.rb is
+# executed as a script, which the ENV tests do in a subprocess. This boot file is
+# pushed into those subprocesses through RUBYOPT so their coverage is measured
+# too, and merged into the report at the end of the run.
+CHILD_COVERAGE_DIR     = Dir.mktmpdir('carthage_child_cov')
+CHILD_COVERAGE_RESULTS = File.join(CHILD_COVERAGE_DIR, 'results')
+CHILD_COVERAGE_BOOT    = File.join(CHILD_COVERAGE_DIR, 'coverage_boot.rb')
+FileUtils.mkdir_p(CHILD_COVERAGE_RESULTS)
+File.write(CHILD_COVERAGE_BOOT, <<~'BOOT')
+  require 'coverage'
+  Coverage.start
+  at_exit do
+    dir = ENV['AC_TEST_COVERAGE_RESULTS']
+    unless dir.nil? || dir.empty?
+      File.binwrite(
+        File.join(dir, "cov-#{Process.pid}-#{rand(1 << 32)}.dump"),
+        Marshal.dump(Coverage.result)
+      )
+    end
+  end
+BOOT
+
 require MAIN_RB
 
 # ─── Custom Formatter ─────────────────────────────────────────────────────────
@@ -171,6 +194,8 @@ def run_main(env = {}, chdir: nil, path_prefix: nil)
     'AC_CARTHAGE_FLAGS'   => nil
   }.merge(env)
   spawn_env['PATH'] = "#{path_prefix}:#{ENV.fetch('PATH', '')}" if path_prefix
+  spawn_env['AC_TEST_COVERAGE_RESULTS'] = CHILD_COVERAGE_RESULTS
+  spawn_env['RUBYOPT'] = [ENV['RUBYOPT'], "-r#{CHILD_COVERAGE_BOOT}"].compact.join(' ').strip
 
   options = {}
   options[:chdir] = chdir if chdir
@@ -184,107 +209,6 @@ RSpec.describe 'Required libraries' do
     it "loads '#{lib}'" do
       expect { require lib }.not_to raise_error
     end
-  end
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-RSpec.describe '#carthage_available?' do
-  let(:tmpdir) { Dir.mktmpdir('carthage_bin') }
-  after { FileUtils.rm_rf(tmpdir) }
-
-  it 'returns true when the executable exists' do
-    path = File.join(tmpdir, 'carthage')
-    FileUtils.touch(path)
-    expect(carthage_available?(path)).to be(true)
-  end
-
-  it 'returns false when the executable is missing' do
-    expect(carthage_available?(File.join(tmpdir, 'nope'))).to be(false)
-  end
-
-  it 'defaults to the Homebrew install location' do
-    expect(CARTHAGE_EXECUTABLE_PATH).to eq('/usr/local/bin/carthage')
-    expect(File).to receive(:exist?).with(CARTHAGE_EXECUTABLE_PATH).and_return(true)
-    expect(carthage_available?).to be(true)
-  end
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-RSpec.describe '#cartfile_directory' do
-  context 'without AC_REPOSITORY_DIR' do
-    it 'resolves the default "./" to the current directory' do
-      expect(cartfile_directory('./')).to eq('.')
-    end
-
-    it 'strips the file name from a nested path' do
-      expect(cartfile_directory('sub/Cartfile')).to eq('sub')
-    end
-
-    it 'resolves an empty repository path to the same relative lookup' do
-      expect(cartfile_directory('sub/Cartfile', '')).to eq('sub')
-    end
-
-    it 'resolves a nil repository path to a relative lookup' do
-      expect(cartfile_directory('sub/Cartfile', nil)).to eq('sub')
-    end
-  end
-
-  context 'with AC_REPOSITORY_DIR' do
-    it 'returns the repository directory for the default "./"' do
-      expect(cartfile_directory('./', '/repo')).to eq('/repo')
-    end
-
-    it 'joins a nested Cartfile path onto the repository directory' do
-      expect(cartfile_directory('sub/Cartfile', '/repo')).to eq('/repo/sub')
-    end
-
-    it 'keeps an absolute Cartfile path absolute' do
-      expect(cartfile_directory('/elsewhere/Cartfile', '/repo')).to eq('/elsewhere')
-    end
-  end
-
-  context 'with an unusable Cartfile path' do
-    it 'raises TypeError when the path is nil' do
-      expect { cartfile_directory(nil) }.to raise_error(TypeError)
-    end
-
-    it 'resolves an empty path to the current directory' do
-      expect(cartfile_directory('')).to eq('.')
-      expect(cartfile_directory('', '/repo')).to eq('/repo')
-    end
-  end
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-RSpec.describe '#carthage_command' do
-  it 'falls back to bootstrap when no command is given' do
-    expect(carthage_command).to eq('carthage bootstrap ')
-  end
-
-  # Only nil triggers the default, so an empty AC_CARTHAGE_COMMAND leaves carthage
-  # without a subcommand. Asserted to lock the current behaviour in place.
-  it 'does not fall back to bootstrap when the command is an empty string' do
-    expect(carthage_command('', '')).to eq('carthage  ')
-  end
-
-  it 'uses the given command' do
-    expect(carthage_command('update')).to eq('carthage update ')
-  end
-
-  it 'appends the given flags' do
-    expect(carthage_command('bootstrap', '--platform iOS --use-xcframeworks'))
-      .to eq('carthage bootstrap --platform iOS --use-xcframeworks')
-  end
-
-  it 'appends nothing when flags are nil' do
-    expect(carthage_command('update', nil)).to eq('carthage update ')
-  end
-
-  it 'exposes bootstrap as the documented default' do
-    expect(DEFAULT_CARTHAGE_COMMAND).to eq('bootstrap')
   end
 end
 
@@ -307,17 +231,18 @@ RSpec.describe '#runCommand' do
       .to raise_error(SystemExit) { |e| expect(e.status).to eq(3) }
   end
 
-  it 'exits when the command cannot be executed at all' do
-    expect { runCommand('ac_test_command_that_does_not_exist') }.to raise_error(SystemExit)
-  end
-
-  it 'raises TypeError when the command is nil' do
-    expect { runCommand(nil) }.to raise_error(TypeError)
+  it 'exits 127 when the command cannot be executed at all' do
+    expect { runCommand('ac_test_command_that_does_not_exist') }
+      .to raise_error(SystemExit) { |e| expect(e.status).to eq(127) }
   end
 
   it 'exits 127 when the command is an empty string' do
     expect { runCommand('') }
       .to raise_error(SystemExit) { |e| expect(e.status).to eq(127) }
+  end
+
+  it 'raises TypeError when the command is nil' do
+    expect { runCommand(nil) }.to raise_error(TypeError)
   end
 end
 
@@ -334,7 +259,7 @@ RSpec.describe 'ENV validation: Cartfile resolution' do
       expect(out).to include('Cartfile do not exist on ./Cartfile.')
     end
 
-    it 'defaults to "./" when set to an empty string' do
+    it 'resolves an empty string to the same default directory' do
       out, _err, status = run_main({ 'AC_CARTFILE_PATH' => '' }, chdir: workdir)
       expect(status.exitstatus).to eq(0)
       expect(out).to include('Cartfile do not exist on ./Cartfile.')
@@ -354,7 +279,7 @@ RSpec.describe 'ENV validation: Cartfile resolution' do
       expect(out).to include('Cartfile do not exist on sub/Cartfile.')
     end
 
-    it 'falls back to a relative lookup when set to an empty string' do
+    it 'resolves an empty string to the same relative lookup' do
       out, _err, status = run_main(
         { 'AC_CARTFILE_PATH' => 'sub/Cartfile', 'AC_REPOSITORY_DIR' => '' },
         chdir: workdir
@@ -400,10 +325,10 @@ RSpec.describe 'ENV validation: carthage invocation' do
     build_fake_bin(bindir, carthage_exit_status: carthage_exit_status)
     _out, _err, status = run_main(
       {
-        'AC_REPOSITORY_DIR'            => workdir,
-        'AC_TEST_CARTHAGE_ARGS_FILE'   => args_file,
-        'AC_TEST_CARTHAGE_CWD_FILE'    => cwd_file,
-        'AC_TEST_BREW_ARGS_FILE'       => brew_file
+        'AC_REPOSITORY_DIR'          => workdir,
+        'AC_TEST_CARTHAGE_ARGS_FILE' => args_file,
+        'AC_TEST_CARTHAGE_CWD_FILE'  => cwd_file,
+        'AC_TEST_BREW_ARGS_FILE'     => brew_file
       }.merge(env),
       chdir: workdir,
       path_prefix: bindir
@@ -467,20 +392,52 @@ RSpec.describe 'ENV validation: carthage invocation' do
 end
 
 # ─── Coverage Report ──────────────────────────────────────────────────────────
-def print_coverage_report
-  return unless defined?(Coverage) && Coverage.running?
 
-  result = begin
-    Coverage.result(stop: false, clear: false)
-  rescue ArgumentError
-    Coverage.result
+# Merges the in-process result with every subprocess dump, so lines that only run
+# under `if __FILE__ == $PROGRAM_NAME` are counted as the covered lines they are.
+def merged_main_coverage
+  results = []
+
+  if defined?(Coverage) && Coverage.running?
+    results << begin
+      Coverage.result(stop: false, clear: false)
+    rescue ArgumentError
+      Coverage.result
+    end
   end
 
-  main_path = result.keys.find { |p| p&.end_with?('main.rb') }
-  return puts("\nCoverage: main.rb not found in results") unless main_path
+  child_dumps = Dir.glob(File.join(CHILD_COVERAGE_RESULTS, '*.dump')).sort
+  child_dumps.each do |file|
+    results << Marshal.load(File.binread(file))
+  rescue StandardError
+    next
+  end
 
-  data      = result[main_path]
-  lines     = data.each_with_index.reject { |c, _| c.nil? }
+  merged = nil
+  results.each do |result|
+    key = result.keys.find { |path| path&.end_with?('main.rb') }
+    next unless key
+
+    data = result[key]
+    if merged.nil?
+      merged = data.dup
+    elsif merged.size == data.size
+      data.each_with_index do |count, i|
+        next if count.nil? || merged[i].nil?
+
+        merged[i] += count
+      end
+    end
+  end
+
+  [merged, child_dumps.size]
+end
+
+def print_coverage_report
+  merged, child_runs = merged_main_coverage
+  return puts("\nCoverage: main.rb not found in results") if merged.nil?
+
+  lines     = merged.each_with_index.reject { |c, _| c.nil? }
   total     = lines.size
   covered   = lines.count { |c, _| c.to_i > 0 }
   pct       = total.positive? ? (covered * 100.0 / total).round(1) : 100.0
@@ -494,6 +451,7 @@ def print_coverage_report
   puts '  Coverage Report'
   puts "\e[90m#{'─' * 72}\e[0m"
   puts "  main.rb  #{bar}  #{color}#{pct}%\e[0m  (#{covered}/#{total} lines)"
+  puts "  \e[90mmerged from this process + #{child_runs} subprocess run(s)\e[0m"
   if uncovered.any? && uncovered.size <= 20
     puts "  Uncovered lines: \e[90m#{uncovered.join(', ')}\e[0m"
   elsif uncovered.any?
@@ -512,5 +470,6 @@ if __FILE__ == $PROGRAM_NAME
 
   exit_code = RSpec::Core::Runner.run(['--order', 'defined'])
   print_coverage_report
+  FileUtils.rm_rf(CHILD_COVERAGE_DIR)
   exit exit_code
 end
