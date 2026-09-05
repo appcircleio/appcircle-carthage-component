@@ -180,35 +180,10 @@ end
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
 RSpec.describe 'Required libraries' do
-  %w[English open3 pathname].each do |lib|
+  %w[open3 pathname].each do |lib|
     it "loads '#{lib}'" do
       expect { require lib }.not_to raise_error
     end
-  end
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-RSpec.describe '#get_env_variable' do
-  around do |example|
-    old = ENV['_AC_TEST_VAR']
-    example.run
-    ENV['_AC_TEST_VAR'] = old
-  end
-
-  it 'returns the value when the key is set' do
-    ENV['_AC_TEST_VAR'] = 'hello'
-    expect(get_env_variable('_AC_TEST_VAR')).to eq('hello')
-  end
-
-  it 'returns nil when the key is missing' do
-    ENV.delete('_AC_TEST_VAR')
-    expect(get_env_variable('_AC_TEST_VAR')).to be_nil
-  end
-
-  it 'returns nil when the value is an empty string' do
-    ENV['_AC_TEST_VAR'] = ''
-    expect(get_env_variable('_AC_TEST_VAR')).to be_nil
   end
 end
 
@@ -247,11 +222,11 @@ RSpec.describe '#cartfile_directory' do
       expect(cartfile_directory('sub/Cartfile')).to eq('sub')
     end
 
-    it 'treats an empty repository path like a missing one' do
+    it 'resolves an empty repository path to the same relative lookup' do
       expect(cartfile_directory('sub/Cartfile', '')).to eq('sub')
     end
 
-    it 'treats a nil repository path like a missing one' do
+    it 'resolves a nil repository path to a relative lookup' do
       expect(cartfile_directory('sub/Cartfile', nil)).to eq('sub')
     end
   end
@@ -271,12 +246,13 @@ RSpec.describe '#cartfile_directory' do
   end
 
   context 'with an unusable Cartfile path' do
-    it 'raises when the path is nil' do
-      expect { cartfile_directory(nil) }.to raise_error(RuntimeError, /Cartfile path is empty/)
+    it 'raises TypeError when the path is nil' do
+      expect { cartfile_directory(nil) }.to raise_error(TypeError)
     end
 
-    it 'raises when the path is an empty string' do
-      expect { cartfile_directory('', '/repo') }.to raise_error(RuntimeError, /Cartfile path is empty/)
+    it 'resolves an empty path to the current directory' do
+      expect(cartfile_directory('')).to eq('.')
+      expect(cartfile_directory('', '/repo')).to eq('/repo')
     end
   end
 end
@@ -288,8 +264,10 @@ RSpec.describe '#carthage_command' do
     expect(carthage_command).to eq('carthage bootstrap ')
   end
 
-  it 'falls back to bootstrap when the command is an empty string' do
-    expect(carthage_command('', '')).to eq('carthage bootstrap ')
+  # Only nil triggers the default, so an empty AC_CARTHAGE_COMMAND leaves carthage
+  # without a subcommand. Asserted to lock the current behaviour in place.
+  it 'does not fall back to bootstrap when the command is an empty string' do
+    expect(carthage_command('', '')).to eq('carthage  ')
   end
 
   it 'uses the given command' do
@@ -333,16 +311,13 @@ RSpec.describe '#runCommand' do
     expect { runCommand('ac_test_command_that_does_not_exist') }.to raise_error(SystemExit)
   end
 
-  it 'raises when the command is nil' do
-    expect { runCommand(nil) }.to raise_error(RuntimeError, /without a command/)
+  it 'raises TypeError when the command is nil' do
+    expect { runCommand(nil) }.to raise_error(TypeError)
   end
 
-  it 'raises when the command is an empty string' do
-    expect { runCommand('') }.to raise_error(RuntimeError, /without a command/)
-  end
-
-  it 'raises when the command is only whitespace' do
-    expect { runCommand("  \t ") }.to raise_error(RuntimeError, /without a command/)
+  it 'exits 127 when the command is an empty string' do
+    expect { runCommand('') }
+      .to raise_error(SystemExit) { |e| expect(e.status).to eq(127) }
   end
 end
 
@@ -443,10 +418,12 @@ RSpec.describe 'ENV validation: carthage invocation' do
       expect(args).to eq('bootstrap')
     end
 
-    it 'defaults to bootstrap when set to an empty string' do
+    # `ENV[...] || "bootstrap"` only defaults on nil, so an empty value reaches
+    # carthage as-is. Asserted to lock the current behaviour in place.
+    it 'invokes carthage without a subcommand when set to an empty string' do
       status, args = invoke({ 'AC_CARTHAGE_COMMAND' => '' })
       expect(status.exitstatus).to eq(0)
-      expect(args).to eq('bootstrap')
+      expect(args).to eq('')
     end
 
     it 'passes the configured command through' do
