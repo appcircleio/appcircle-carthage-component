@@ -18,3 +18,13 @@ Optional Input Variables
 
 - `$AC_CARTHAGE_FLAGS`: Specifies additional flags after carthage command. Default value is empty.\
  **For Xcode 12 and above, make sure to include** `--use-xcframeworks` **here**. To shorten the build time, make sure to specify the platform: `--platform iOS`. Example usage: `--platform iOS --use-xcframeworks`
+
+## Running tests
+
+Requires the [RSpec](https://rspec.info) gem and the Ruby standard library (Coverage, Open3). No Gemfile or Bundler needed.
+
+```bash
+ruby test/test_main.rb
+```
+
+The tests never invoke the real `carthage` or `brew` binaries: the subprocess cases put stub executables on `PATH` and assert the composed command. A coverage report is printed at the end of each run.
