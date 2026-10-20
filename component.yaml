@@ -24,7 +24,7 @@ inputs:
   defaultValue: "--platform iOS --use-xcframeworks"
   isRequired: false
   title: Additional Carthage Flags
-  description: "Specifies carthage flags to add. For example: --platform iOS --use-xcframeworks"
+  description: "Specifies carthage flags to add. For example: --platform iOS --use-xcframeworks. Add --no-use-binaries to build every dependency from source without querying the GitHub API for prebuilt binaries, for example in air-gapped networks."
   helpText:
 outputs:
 processFilename: ruby

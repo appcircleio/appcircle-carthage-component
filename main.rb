@@ -3,7 +3,8 @@ require 'pathname'
 
 cartfile_path = ENV["AC_CARTFILE_PATH"] || "./"
 repository_path = ENV["AC_REPOSITORY_DIR"]
-is_carthage_available = File.exist?("/usr/local/bin/carthage")
+# Homebrew installs to /opt/homebrew/bin on Apple Silicon and /usr/local/bin on Intel, so look on PATH
+is_carthage_available = system("command -v carthage > /dev/null 2>&1")
 
 cartfile_dir_path = repository_path ? (Pathname.new repository_path).join(File.dirname(cartfile_path)) : File.dirname(cartfile_path)
 carthage_cartfile_path = File.join(cartfile_dir_path,"Cartfile")
